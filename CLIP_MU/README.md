@@ -1,13 +1,6 @@
 # CLIP Unlearning Scenario
 
-## Dowload Pretrained and Fine-tuned Weights
-Fine-tuned model checkpoints and their corresponding classifier heads, are available at [this link](https://drive.google.com/drive/u/1/folders/1m1iHi5KoTN1Fg5JqIZxtVP1ZTxgILZyi).
-
-## Dataset
-We evaluate across eight benchmarks: SUN397, Stanford Cars, RESISC45, EuroSAT, SVHN, GTSRB, MNIST, and DTD.
-For details on dataset preprocessing, please refer to the [Task Arithmetic](https://github.com/mlfoundations/task_vectors) or [Tangent Arithmetic](https://github.com/gortizji/tangent_task_arithmetic/tree/main).
-
-## Dependencies 
+### Dependencies 
 1. Install necessary packages:
 ```sh
 conda env create
@@ -18,6 +11,13 @@ conda activate negmerge-clip
 cd CLIP_MU
 export PYTHONPATH="$PYTHONPATH:$PWD"
 ```
+
+### Dowload Pretrained and Fine-tuned Weights
+Fine-tuned model, their corresponding classifier heads, and the pretrained model are available at [this link](https://drive.google.com/drive/u/1/folders/1m1iHi5KoTN1Fg5JqIZxtVP1ZTxgILZyi).
+
+### Dataset
+We evaluate across eight benchmarks: SUN397, Stanford Cars, RESISC45, EuroSAT, SVHN, GTSRB, MNIST, and DTD.
+For details on dataset preprocessing, please refer to the [Task Arithmetic](https://github.com/mlfoundations/task_vectors) or [Tangent Arithmetic](https://github.com/gortizji/tangent_task_arithmetic/tree/main).
 
 ## Training
 ### Finetune the CLIP Model
@@ -62,5 +62,5 @@ python src/negmerge.py --model=ViT-B-32 --finetuning-mode=standard
 python src/negmerge.py --model=ViT-B-32 --finetuning-mode=linear
 ```
 
-### Reference
-https://github.com/gortizji/tangent_task_arithmetic/tree/main
+## Reference
+This repository is built on top of [Tangent Arithmetic](https://github.com/gortizji/tangent_task_arithmetic/tree/main).
