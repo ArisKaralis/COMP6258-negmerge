@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data & datasets
+dataset/
+Finetuned/
+*.csv
+*.json
+!CLIP_MU/src/
+
+# Model checkpoints & weights
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.ckpt
+
+# Logs
+*.log
+logs/
+runs/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
