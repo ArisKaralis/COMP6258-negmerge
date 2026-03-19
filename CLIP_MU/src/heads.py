@@ -53,18 +53,35 @@ def get_classification_head(args, dataset):
         # We want to load the head for the validation set always to be consistent with the one generated at training time.
         dataset += "Val"
 
-    filename = os.path.join(f"{args.results_db}/{args.finetuning_mode}/{args.model}/", f"head_{dataset}.pt")
+    if hasattr(args, 'save') and args.save is not None:
+        base_dir = args.save
+    else:
+        base_dir = f"{args.results_db}/{args.finetuning_mode}/{args.model}"
+        
+    filename = os.path.join(base_dir, f"head_{dataset}.pt")
+    fallback_filename = os.path.join("NegMerge_Checkpoints", f"head_{dataset}.pt")
+
     if os.path.exists(filename):
         print(f"Classification head for {args.model} on {dataset} exists at {filename}")
         return ClassificationHead.load(filename)
-    print(
-        f"Did not find classification head for {args.model} on {dataset} at {filename}, building one from scratch."  # noqa: E501
-    )
+    elif os.path.exists(fallback_filename):
+        print(f"Classification head for {args.model} on {dataset} exists at {fallback_filename}")
+        return ClassificationHead.load(fallback_filename)
+
+    print(f"Did not find classification head for {args.model} on {dataset} at {filename}, building one from scratch.")
     model = ImageEncoder(args, keep_lang=True).model
     template = get_templates(dataset)
     classification_head = build_classification_head(
         model, dataset, template, args.data_location, args.device
     )
-    os.makedirs(args.save, exist_ok=True)
-    classification_head.save(filename)
+    
+    if base_dir and "None" not in base_dir:
+        os.makedirs(base_dir, exist_ok=True)
+        classification_head.save(filename)
+    else:
+        fallback_dir = os.path.dirname(fallback_filename)
+        os.makedirs(fallback_dir, exist_ok=True)
+        classification_head.save(fallback_filename)
+        print(f"Saved newly built classification head to {fallback_filename}")
+
     return classification_head

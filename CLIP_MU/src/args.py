@@ -134,8 +134,12 @@ def parse_arguments():
     )
 
     parsed_args = parser.parse_args()
-    parsed_args.device = "cuda" if torch.cuda.is_available() else "cpu"
-
+    if torch.cuda.is_available():
+        parsed_args.device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        parsed_args.device = "mps"
+    else:
+        parsed_args.device = "cpu"
     if parsed_args.load is not None and len(parsed_args.load) == 1:
         parsed_args.load = parsed_args.load[0]
     return parsed_args

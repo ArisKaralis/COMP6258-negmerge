@@ -1,0 +1,26 @@
+name: negmerge-env
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - numpy
+  - scipy
+  - pillow
+  - pyyaml
+  - pip
+  - pip:
+    - transformers
+    - peft
+    - datasets
+    - diffusers
+    - accelerate
+    - huggingface_hub
+    - safetensors
+    - open-clip-torch
+    - timm
+    - jupyterlab

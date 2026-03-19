@@ -27,16 +27,14 @@ class _TaskVector(abc.ABC):
                 if isinstance(pretrained_checkpoint, dict):
                     pretrained_state_dict = pretrained_checkpoint
                 else:
-                    pretrained_state_dict = self._load_checkpoint(
-                        pretrained_checkpoint
-                    ).state_dict()
+                    pt_ckpt = self._load_checkpoint(pretrained_checkpoint)
+                    pretrained_state_dict = pt_ckpt if isinstance(pt_ckpt, dict) else pt_ckpt.state_dict()
 
                 if isinstance(finetuned_checkpoint, dict):
                     finetuned_state_dict = finetuned_checkpoint
                 else:
-                    finetuned_state_dict = self._load_checkpoint(
-                        finetuned_checkpoint
-                    ).state_dict()
+                    ft_ckpt = self._load_checkpoint(finetuned_checkpoint)
+                    finetuned_state_dict = ft_ckpt if isinstance(ft_ckpt, dict) else ft_ckpt.state_dict()
 
                 self.vector = {}
                 for key in pretrained_state_dict:

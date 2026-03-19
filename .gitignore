@@ -26,7 +26,7 @@ Finetuned/
 !CLIP_MU/src/
 
 # Model checkpoints & weights
-checkpoints/
+NegMerge_Checkpoints/
 *.pt
 *.pth
 *.bin
@@ -43,3 +43,7 @@ runs/
 # IDE
 .vscode/
 .idea/
+
+
+# Task Arithmetic 
+tangent_task_arithmetic/
