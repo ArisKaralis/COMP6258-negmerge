@@ -235,6 +235,24 @@ class ImageNetTrain(ImageNet):
     def get_test_dataset(self):
         pass
 
+
+class ImageNetVal(ImageNet):
+    def __init__(self,
+                 preprocess,
+                 location=os.path.expanduser('~/data'),
+                 batch_size=32,
+                 num_workers=32):
+        self.preprocess = preprocess
+        self.location = location
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.classnames = imagenet_classnames
+
+        # Validation-only dataset: do not require an ImageNet train split.
+        self.train_dataset = None
+        self.train_loader = None
+        self.populate_test()
+
 class ImageNetK(ImageNet):
 
     def get_train_sampler(self):

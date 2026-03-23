@@ -6,8 +6,8 @@ import open_clip
 import torch
 from tqdm import tqdm
 
-from src.datasets.registry import get_dataset
-from src.datasets.templates import get_templates
+from src.datasets_local_2.registry import get_dataset
+from src.datasets_local_2.templates import get_templates
 from src.modeling import ClassificationHead, ImageEncoder
 
 

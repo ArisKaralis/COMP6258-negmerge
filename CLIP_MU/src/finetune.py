@@ -6,8 +6,8 @@ import time
 import torch
 
 from src.args import parse_arguments
-from src.datasets.common import get_dataloader, maybe_dictionarize
-from src.datasets.registry import get_dataset
+from src.datasets_local_2.common import get_dataloader, maybe_dictionarize
+from src.datasets_local_2.registry import get_dataset
 from src.distributed import cleanup_ddp, distribute_loader, is_main_process, setup_ddp
 from src.eval import eval_single_dataset
 from src.heads import get_classification_head

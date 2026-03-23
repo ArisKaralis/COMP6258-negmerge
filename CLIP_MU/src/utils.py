@@ -57,7 +57,7 @@ def torch_save(model, save_path):
 
 
 def torch_load(save_path, device=None):
-    model = torch.load(save_path, map_location="cpu")
+    model = torch.load(save_path, map_location="cpu", weights_only=False)
     if device is not None:
         model = model.to(device)
     return model

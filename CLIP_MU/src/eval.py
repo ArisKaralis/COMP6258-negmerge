@@ -6,8 +6,8 @@ import tqdm
 import os
 
 from src import utils
-from src.datasets.common import get_dataloader, maybe_dictionarize
-from src.datasets.registry import get_dataset
+from src.datasets_local_2.common import get_dataloader, maybe_dictionarize
+from src.datasets_local_2.registry import get_dataset
 from src.heads import get_classification_head
 from src.modeling import ImageClassifier
 

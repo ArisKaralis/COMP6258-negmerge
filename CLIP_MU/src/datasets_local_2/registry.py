@@ -6,18 +6,18 @@ import copy
 
 from torch.utils.data.dataset import random_split
 
-from src.datasets.cars import Cars
-from src.datasets.cifar10 import CIFAR10
-from src.datasets.cifar100 import CIFAR100
-from src.datasets.dtd import DTD
-from src.datasets.eurosat import EuroSAT, EuroSATVal
-from src.datasets.gtsrb import GTSRB
-from src.datasets.imagenet import ImageNet
-from src.datasets.mnist import MNIST
-from src.datasets.resisc45 import RESISC45
-from src.datasets.stl10 import STL10
-from src.datasets.svhn import SVHN
-from src.datasets.sun397 import SUN397
+from src.datasets_local_2.cars import Cars
+from src.datasets_local_2.cifar10 import CIFAR10
+from src.datasets_local_2.cifar100 import CIFAR100
+from src.datasets_local_2.dtd import DTD
+from src.datasets_local_2.eurosat import EuroSAT, EuroSATVal
+from src.datasets_local_2.gtsrb import GTSRB
+from src.datasets_local_2.imagenet import ImageNet, ImageNetVal
+from src.datasets_local_2.mnist import MNIST
+from src.datasets_local_2.resisc45 import RESISC45
+from src.datasets_local_2.stl10 import STL10
+from src.datasets_local_2.svhn import SVHN
+from src.datasets_local_2.sun397 import SUN397
 
 registry = {
     name: obj for name, obj in inspect.getmembers(sys.modules[__name__], inspect.isclass)
