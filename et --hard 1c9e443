@@ -1,0 +1,8 @@
+[33mae5b987[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mJoao---old[m[33m, [m[1;31morigin/Joao---old[m[33m)[m HEAD@{0}: reset: moving to HEAD~1
+[33m41e4714[m HEAD@{1}: reset: moving to HEAD~1
+[33m1c9e443[m HEAD@{2}: reset: moving to HEAD~1
+[33md26b6a0[m HEAD@{3}: commit: git ignore late?
+[33m1c9e443[m HEAD@{4}: commit: Running but small data leak (val used twice, add test)
+[33m41e4714[m HEAD@{5}: commit: git ignore jpeg
+[33mae5b987[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mJoao---old[m[33m, [m[1;31morigin/Joao---old[m[33m)[m HEAD@{6}: checkout: moving from main to Joao---old
+[33m263d879[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{7}: clone: from https://github.com/ArisKaralis/COMP6258-negmerge.git
