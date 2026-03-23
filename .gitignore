@@ -21,9 +21,13 @@ env/
 # Data & datasets
 dataset/
 Finetuned/
+finetuned_them/
 *.csv
 *.json
 !CLIP_MU/src/
+
+# Old checkpoints & weights
+Old/
 
 # Model checkpoints & weights
 checkpoints/
@@ -43,3 +47,12 @@ runs/
 # IDE
 .vscode/
 .idea/
+
+# Data
+*.jpeg
+*.jpg
+*.png
+*.JPEG
+*.JPG
+*.PNG
+
