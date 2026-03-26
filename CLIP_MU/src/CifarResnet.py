@@ -55,15 +55,38 @@ warnings.filterwarnings(
 SEED          = 42
 NUM_TRIALS    = 3          # Paper uses 3 independent trials
 FORGET_RATIO  = 0.10       # 10% of training data is the forget set
-BATCH_SIZE    = 256
+BATCH_SIZE    = int(os.getenv("BATCH_SIZE", "256"))
+CPU_COUNT     = os.cpu_count() or 4
+NUM_WORKERS   = int(os.getenv("NUM_WORKERS", str(max(2, min(8, CPU_COUNT - 1)))))
+PREFETCH      = int(os.getenv("PREFETCH_FACTOR", "2"))
 
 
 def get_device():
+    forced = os.getenv("DEVICE", "").strip().lower()
+    if forced:
+        if forced == "cuda" and torch.cuda.is_available():
+            return torch.device("cuda")
+        if forced == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        if forced == "cpu":
+            return torch.device("cpu")
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def print_device_diagnostics():
+    mps_built = bool(getattr(torch.backends.mps, "is_built", lambda: False)()) if hasattr(torch.backends, "mps") else False
+    mps_available = bool(getattr(torch.backends.mps, "is_available", lambda: False)()) if hasattr(torch.backends, "mps") else False
+    print(f"Torch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"MPS built: {mps_built}")
+    print(f"MPS available: {mps_available}")
+    if DEVICE.type == "cpu" and mps_built and not mps_available:
+        print("MPS backend is built but unavailable at runtime; falling back to CPU.")
 
 
 DEVICE        = get_device()
@@ -117,14 +140,24 @@ def get_datasets(seed):
 def make_loader(dataset, shuffle=True, batch_size=BATCH_SIZE):
     # pin_memory improves host->GPU transfer for CUDA, but is unsupported on MPS.
     pin_memory = DEVICE.type == "cuda"
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                      num_workers=2, pin_memory=pin_memory)
+    kwargs = dict(
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=NUM_WORKERS,
+        pin_memory=pin_memory,
+        persistent_workers=NUM_WORKERS > 0,
+    )
+    if NUM_WORKERS > 0:
+        kwargs["prefetch_factor"] = PREFETCH
+    return DataLoader(dataset, **kwargs)
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 
 def build_resnet18(num_classes=10):
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
+    if DEVICE.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
     return model.to(DEVICE)
 
 
@@ -136,7 +169,11 @@ def clone_model(model):
 def train_one_epoch(model, loader, optimizer, criterion):
     model.train()
     for x, y in loader:
-        x, y = x.to(DEVICE), y.to(DEVICE)
+        non_blocking = DEVICE.type == "cuda"
+        x = x.to(DEVICE, non_blocking=non_blocking)
+        y = y.to(DEVICE, non_blocking=non_blocking)
+        if DEVICE.type == "cuda":
+            x = x.contiguous(memory_format=torch.channels_last)
         optimizer.zero_grad()
         loss = criterion(model(x), y)
         loss.backward()
@@ -149,7 +186,11 @@ def evaluate(model, loader):
     correct = total = 0
     with torch.no_grad():
         for x, y in loader:
-            x, y = x.to(DEVICE), y.to(DEVICE)
+            non_blocking = DEVICE.type == "cuda"
+            x = x.to(DEVICE, non_blocking=non_blocking)
+            y = y.to(DEVICE, non_blocking=non_blocking)
+            if DEVICE.type == "cuda":
+                x = x.contiguous(memory_format=torch.channels_last)
             preds = model(x).argmax(dim=1)
             correct += (preds == y).sum().item()
             total   += y.size(0)
@@ -182,7 +223,11 @@ def compute_losses(model, loader):
     losses = []
     with torch.no_grad():
         for x, y in loader:
-            x, y = x.to(DEVICE), y.to(DEVICE)
+            non_blocking = DEVICE.type == "cuda"
+            x = x.to(DEVICE, non_blocking=non_blocking)
+            y = y.to(DEVICE, non_blocking=non_blocking)
+            if DEVICE.type == "cuda":
+                x = x.contiguous(memory_format=torch.channels_last)
             loss = criterion(model(x), y)
             losses.extend(loss.cpu().numpy())
     return np.array(losses)
@@ -228,6 +273,38 @@ def apply_task_vector(pretrained_sd, tv, coef=1.0):
     for k in tv:
         new_sd[k] = pretrained_sd[k].float() + coef * tv[k]
     return new_sd
+
+
+def build_state_dict_from_task_vector(pretrained_sd, tv, coef=1.0):
+    """Return lightweight state dict for repeated coef search."""
+    new_sd = {}
+    for k, base in pretrained_sd.items():
+        if k in tv:
+            new_sd[k] = base.float() + coef * tv[k]
+        else:
+            new_sd[k] = base
+    return new_sd
+
+
+def select_best_coef(pretrained_sd, tv, coef_range, base_model,
+                     retain_loader, forget_loader, threshold):
+    """Select coefficient that minimises forget accuracy under retain threshold."""
+    best_coef = coef_range[0]
+    best_forget = float("inf")
+    scratch = clone_model(base_model)
+
+    for coef in coef_range:
+        new_sd = build_state_dict_from_task_vector(pretrained_sd, tv, coef=-coef)
+        scratch.load_state_dict(new_sd, strict=True)
+        r_acc = evaluate(scratch, retain_loader)
+        if r_acc < threshold:
+            continue
+        f_acc = evaluate(scratch, forget_loader)
+        if f_acc < best_forget:
+            best_forget = f_acc
+            best_coef = coef
+
+    return best_coef, best_forget
 
 
 def load_model_with_sd(base_model, state_dict):
@@ -331,15 +408,16 @@ def find_best_single_tv(pretrained_sd, task_vectors, base_model,
     best_forget_acc = float("inf")
     best_tv = task_vectors[0]
     best_coef = coef_range[0]
+    scratch = clone_model(base_model)
 
     for tv in tqdm(task_vectors, desc="  TA single-best search", leave=False):
         for coef in coef_range:
-            new_sd = apply_task_vector(pretrained_sd, tv, coef=-coef)
-            m = load_model_with_sd(base_model, new_sd)
-            r_acc = evaluate(m, retain_loader)
+            new_sd = build_state_dict_from_task_vector(pretrained_sd, tv, coef=-coef)
+            scratch.load_state_dict(new_sd, strict=True)
+            r_acc = evaluate(scratch, retain_loader)
             if r_acc < threshold:
                 continue
-            f_acc = evaluate(m, forget_loader)
+            f_acc = evaluate(scratch, forget_loader)
             if f_acc < best_forget_acc:
                 best_forget_acc = f_acc
                 best_tv   = tv
@@ -358,7 +436,7 @@ def run_trial(trial_idx, pretrained_model):
     print(f"{'='*60}")
 
     seed = SEED + trial_idx * 100
-    full_train, forget_ds, retain_ds, test_ds = get_datasets(seed)
+    _, forget_ds, retain_ds, test_ds = get_datasets(seed)
 
     forget_loader = make_loader(forget_ds, shuffle=False)
     retain_loader = make_loader(retain_ds, shuffle=False)
@@ -384,15 +462,12 @@ def run_trial(trial_idx, pretrained_model):
     # ── 2. Build 27-model pool (fine-tune on forget set) ──────────────────────
     print("  [2/4] Building 27-model pool (fine-tune on forget set) ...")
     task_vectors   = []
-    finetuned_sds  = []
-
     configs = list(product(EPOCHS_LIST, WD_LIST, LS_LIST))   # 27 configs
     for (ep, wd, ls) in tqdm(configs, desc="  Fine-tuning pool", leave=False):
         m = clone_model(pretrained_model)
         train_model(m, forget_train_loader, epochs=ep, weight_decay=wd,
                     label_smoothing=ls, desc=f"  ft e={ep} wd={wd} ls={ls}")
         fsd = copy.deepcopy(m.state_dict())
-        finetuned_sds.append(fsd)
         task_vectors.append(compute_task_vector(pretrained_sd, fsd))
 
     # Coefficient search range (paper uses 20 values)
@@ -419,17 +494,9 @@ def run_trial(trial_idx, pretrained_model):
     retain_pretrained = evaluate(pretrained_eval_m, retain_loader)
     threshold = 0.95 * retain_pretrained
 
-    best_coef_nm = coef_range[0]
-    best_forget_nm = float("inf")
-    for coef in coef_range:
-        new_sd = apply_task_vector(pretrained_sd, nm_tv, coef=-coef)
-        m = load_model_with_sd(pretrained_model, new_sd)
-        if evaluate(m, retain_loader) < threshold:
-            continue
-        f_acc = evaluate(m, forget_loader)
-        if f_acc < best_forget_nm:
-            best_forget_nm = f_acc
-            best_coef_nm   = coef
+    best_coef_nm, _ = select_best_coef(
+        pretrained_sd, nm_tv, coef_range, pretrained_model,
+        retain_loader, forget_loader, threshold)
 
     nm_sd = apply_task_vector(pretrained_sd, nm_tv, coef=-best_coef_nm)
     nm_m  = load_model_with_sd(pretrained_model, nm_sd)
@@ -445,51 +512,27 @@ def run_trial(trial_idx, pretrained_model):
 
     # ── Uniform Merge ─────────────────────────────────────────────────────────
     um_tv = uniform_merge(task_vectors)
-    best_coef_um = coef_range[0]
-    best_forget_um = float("inf")
-    for coef in coef_range:
-        new_sd = apply_task_vector(pretrained_sd, um_tv, coef=-coef)
-        m = load_model_with_sd(pretrained_model, new_sd)
-        if evaluate(m, retain_loader) < threshold:
-            continue
-        f_acc = evaluate(m, forget_loader)
-        if f_acc < best_forget_um:
-            best_forget_um = f_acc
-            best_coef_um   = coef
+    best_coef_um, _ = select_best_coef(
+        pretrained_sd, um_tv, coef_range, pretrained_model,
+        retain_loader, forget_loader, threshold)
     um_sd = apply_task_vector(pretrained_sd, um_tv, coef=-best_coef_um)
     um_m  = load_model_with_sd(pretrained_model, um_sd)
     record("Uniform Merge", um_m)
 
     # ── TIES-Merging ──────────────────────────────────────────────────────────
     ties_tv = ties_merging(task_vectors)
-    best_coef_ties = coef_range[0]
-    best_forget_ties = float("inf")
-    for coef in coef_range:
-        new_sd = apply_task_vector(pretrained_sd, ties_tv, coef=-coef)
-        m = load_model_with_sd(pretrained_model, new_sd)
-        if evaluate(m, retain_loader) < threshold:
-            continue
-        f_acc = evaluate(m, forget_loader)
-        if f_acc < best_forget_ties:
-            best_forget_ties = f_acc
-            best_coef_ties   = coef
+    best_coef_ties, _ = select_best_coef(
+        pretrained_sd, ties_tv, coef_range, pretrained_model,
+        retain_loader, forget_loader, threshold)
     ties_sd = apply_task_vector(pretrained_sd, ties_tv, coef=-best_coef_ties)
     ties_m  = load_model_with_sd(pretrained_model, ties_sd)
     record("TIES-Merging", ties_m)
 
     # ── MagMax ────────────────────────────────────────────────────────────────
     mm_tv = magmax(task_vectors)
-    best_coef_mm = coef_range[0]
-    best_forget_mm = float("inf")
-    for coef in coef_range:
-        new_sd = apply_task_vector(pretrained_sd, mm_tv, coef=-coef)
-        m = load_model_with_sd(pretrained_model, new_sd)
-        if evaluate(m, retain_loader) < threshold:
-            continue
-        f_acc = evaluate(m, forget_loader)
-        if f_acc < best_forget_mm:
-            best_forget_mm = f_acc
-            best_coef_mm   = coef
+    best_coef_mm, _ = select_best_coef(
+        pretrained_sd, mm_tv, coef_range, pretrained_model,
+        retain_loader, forget_loader, threshold)
     mm_sd = apply_task_vector(pretrained_sd, mm_tv, coef=-best_coef_mm)
     mm_m  = load_model_with_sd(pretrained_model, mm_sd)
     record("MagMax", mm_m)
@@ -625,6 +668,14 @@ def main():
     random.seed(SEED)
 
     print("Device:", DEVICE)
+    print_device_diagnostics()
+    print(f"DataLoader workers: {NUM_WORKERS}, prefetch_factor: {PREFETCH}, batch_size: {BATCH_SIZE}")
+
+    if DEVICE.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+
     print(f"Running {NUM_TRIALS} trial(s) with {len(list(product(EPOCHS_LIST, WD_LIST, LS_LIST)))} models in pool each.\n")
 
     # ── Pre-train once on full CIFAR-10 ──────────────────────────────────────
@@ -639,8 +690,16 @@ def main():
         train_tf, _ = get_transforms()
         full_train = datasets.CIFAR10(DATA_DIR, train=True, download=True, transform=train_tf)
         pin_memory = DEVICE.type == "cuda"
-        full_loader = DataLoader(full_train, batch_size=BATCH_SIZE, shuffle=True,
-                     num_workers=2, pin_memory=pin_memory)
+        full_loader_kwargs = dict(
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=NUM_WORKERS,
+            pin_memory=pin_memory,
+            persistent_workers=NUM_WORKERS > 0,
+        )
+        if NUM_WORKERS > 0:
+            full_loader_kwargs["prefetch_factor"] = PREFETCH
+        full_loader = DataLoader(full_train, **full_loader_kwargs)
         pretrained_model = build_resnet18()
         train_model(pretrained_model, full_loader, epochs=100, desc="Pre-train")
         torch.save(pretrained_model.state_dict(), ckpt_path)

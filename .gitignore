@@ -29,6 +29,7 @@ finetuned_them/
 data/
 datasets_local/
 CLIP_MU/src/datasets_local/
+datasets_22/
 !CLIP_MU/src/
 
 # Old checkpoints & weights
