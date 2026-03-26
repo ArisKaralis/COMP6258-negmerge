@@ -24,6 +24,11 @@ Finetuned/
 finetuned_them/
 *.csv
 *.json
+*.parquet
+*.tar.gz
+data/
+datasets_local/
+CLIP_MU/src/datasets_local/
 !CLIP_MU/src/
 
 # Old checkpoints & weights
@@ -55,4 +60,7 @@ runs/
 *.JPEG
 *.JPG
 *.PNG
+*.parquet
+datasets_local/
+data/
 
