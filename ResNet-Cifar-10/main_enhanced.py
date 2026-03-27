@@ -36,6 +36,9 @@ from utils import (apply_task_vector, compute_task_vector,
                    load_model_with_sd, select_best_coef)
 
 
+COEF_CACHE_VERSION = 2
+
+
 def find_best_single_tv(pretrained_sd, task_vectors, base_model,
                         forget_loader, retain_loader, coef_range,
                         retain_threshold_pct=0.95):
@@ -46,11 +49,12 @@ def find_best_single_tv(pretrained_sd, task_vectors, base_model,
     threshold = retain_threshold_pct * retain_pretrained
 
     best_forget_acc = float("inf")
+    best_tv_idx = 0
     best_tv = task_vectors[0]
     best_coef = coef_range[0]
     scratch = clone_model(base_model)
 
-    for tv in tqdm(task_vectors, desc="  TA single-best search", leave=False):
+    for tv_idx, tv in enumerate(tqdm(task_vectors, desc="  TA single-best search", leave=False)):
         for coef in coef_range:
             new_sd = build_state_dict_from_task_vector(pretrained_sd, tv, coef=-coef)
             scratch.load_state_dict(new_sd, strict=True)
@@ -60,10 +64,11 @@ def find_best_single_tv(pretrained_sd, task_vectors, base_model,
             f_acc = evaluate(scratch, forget_loader)
             if f_acc < best_forget_acc:
                 best_forget_acc = f_acc
+                best_tv_idx = tv_idx
                 best_tv = tv
                 best_coef = coef
 
-    return best_tv, best_coef
+    return best_tv, best_coef, best_tv_idx
 
 
 def run_trial(trial_idx, pretrained_model, checkpoint_mgr, args):
@@ -136,8 +141,9 @@ def run_trial(trial_idx, pretrained_model, checkpoint_mgr, args):
         if args.cache_tvs:
             checkpoint_mgr.save_task_vectors(trial_idx, task_vectors)
 
-    # Coefficient search range (paper uses 20 values)
-    coef_range = [i * 0.05 for i in range(1, 21)]
+    # Coefficient search range: include small values to avoid catastrophic collapse
+    # for high-magnitude merges (e.g., TIES/MagMax).
+    coef_range = [0.0, 0.005, 0.01, 0.02] + [i * 0.05 for i in range(1, 21)]
 
     # ── 3. Evaluate all methods ────────────────────────────────────────────────
     print("  [3/4] Evaluating unlearning methods ...")
@@ -156,26 +162,33 @@ def run_trial(trial_idx, pretrained_model, checkpoint_mgr, args):
 
     # Filter methods based on focus
     methods_to_run = {
-        "NegMerge (ours)": negmerge,
+        "NegMerge (ours)": lambda tvs: negmerge(pretrained_sd, tvs),
         "Uniform Merge": uniform_merge,
         "TIES-Merging": ties_merging,
         "MagMax": magmax,
         "Task Arithmetic†": None,  # Special handling
     }
-    
+
     if args.methods:
-        methods_to_run = {k: v for k, v in methods_to_run.items() 
-                         if any(m in k for m in args.methods)}
+        method_filters = [m.lower() for m in args.methods]
+        methods_to_run = {
+            k: v for k, v in methods_to_run.items()
+            if any(m in k.lower() for m in method_filters)
+        }
+
+    # Compute merged task vectors once and reuse them for sparsity + evaluation.
+    merged_tvs = {}
+    for method_name, merge_fn in methods_to_run.items():
+        if method_name == "Task Arithmetic†":
+            continue
+        merged_tvs[method_name] = merge_fn(task_vectors)
 
     # Compute sparsity for all merged task vectors
     if not args.skip_sparsity:
         print("\n  [Sparsity Analysis]")
         sparsity_results = {}
         
-        for method_name, merge_fn in methods_to_run.items():
-            if method_name == "Task Arithmetic†":
-                continue
-            tv = merge_fn(pretrained_sd, task_vectors)
+        for method_name, tv in merged_tvs.items():
             sp = compute_sparsity(tv)
             sparsity_results[method_name] = sp
             print(f"    {method_name:<26}: {sp['sparsity_pct']:.2f}% sparse "
@@ -187,59 +200,94 @@ def run_trial(trial_idx, pretrained_model, checkpoint_mgr, args):
     retain_pretrained = evaluate(pretrained_eval_m, retain_loader)
     threshold = 0.95 * retain_pretrained
 
+    def get_best_coef(cache_name, merged_tv):
+        cached = None if args.recompute_coefs else checkpoint_mgr.load_best_coefs(trial_idx, cache_name)
+        if (
+            cached is not None
+            and "coef" in cached
+            and int(cached.get("version", 0)) == COEF_CACHE_VERSION
+        ):
+            coef = float(cached["coef"])
+            print(f"    {cache_name:<30} using cached coef={coef:.3f}")
+            return coef
+
+        coef, _ = select_best_coef(
+            pretrained_sd, merged_tv, coef_range, pretrained_model,
+            retain_loader, forget_loader, threshold)
+        checkpoint_mgr.save_best_coefs(
+            trial_idx,
+            cache_name,
+            {
+                "coef": coef,
+                "version": COEF_CACHE_VERSION,
+                "coef_range": coef_range,
+            }
+        )
+        return coef
+
     # ── NegMerge ──────────────────────────────────────────────────────────────
     if "NegMerge (ours)" in methods_to_run:
-        nm_tv = negmerge(pretrained_sd, task_vectors)
-        best_coef_nm, _ = select_best_coef(
-            pretrained_sd, nm_tv, coef_range, pretrained_model,
-            retain_loader, forget_loader, threshold)
+        nm_tv = merged_tvs["NegMerge (ours)"]
+        best_coef_nm = get_best_coef("NegMerge", nm_tv)
         nm_sd = apply_task_vector(pretrained_sd, nm_tv, coef=-best_coef_nm)
         nm_m = load_model_with_sd(pretrained_model, nm_sd)
         record("NegMerge (ours)", nm_m)
-        checkpoint_mgr.save_best_coefs(trial_idx, "NegMerge", {"coef": best_coef_nm})
 
     # ── Task Arithmetic: Single Best Model ────────────────────────────────────
     if "Task Arithmetic†" in methods_to_run:
-        best_tv, best_coef_ta = find_best_single_tv(
-            pretrained_sd, task_vectors, pretrained_model,
-            forget_loader, retain_loader, coef_range)
+        cached_ta = None if args.recompute_coefs else checkpoint_mgr.load_best_coefs(trial_idx, "TaskArithmetic")
+        if (
+            cached_ta is not None
+            and "coef" in cached_ta
+            and "tv_index" in cached_ta
+            and int(cached_ta.get("version", 0)) == COEF_CACHE_VERSION
+        ):
+            best_coef_ta = float(cached_ta["coef"])
+            best_tv_idx = int(cached_ta["tv_index"])
+            if not (0 <= best_tv_idx < len(task_vectors)):
+                raise IndexError(f"Cached TaskArithmetic tv_index={best_tv_idx} is out of range")
+            best_tv = task_vectors[best_tv_idx]
+            print(f"    TaskArithmetic                 using cached coef={best_coef_ta:.3f}, tv_index={best_tv_idx}")
+        else:
+            best_tv, best_coef_ta, best_tv_idx = find_best_single_tv(
+                pretrained_sd, task_vectors, pretrained_model,
+                forget_loader, retain_loader, coef_range)
+            checkpoint_mgr.save_best_coefs(
+                trial_idx, "TaskArithmetic",
+                {
+                    "coef": best_coef_ta,
+                    "tv_index": best_tv_idx,
+                    "version": COEF_CACHE_VERSION,
+                    "coef_range": coef_range,
+                }
+            )
         ta_sd = apply_task_vector(pretrained_sd, best_tv, coef=-best_coef_ta)
         ta_m = load_model_with_sd(pretrained_model, ta_sd)
         record("Task Arithmetic†", ta_m)
-        checkpoint_mgr.save_best_coefs(trial_idx, "TaskArithmetic", {"coef": best_coef_ta})
 
     # ── Uniform Merge ─────────────────────────────────────────────────────────
     if "Uniform Merge" in methods_to_run:
-        um_tv = uniform_merge(task_vectors)
-        best_coef_um, _ = select_best_coef(
-            pretrained_sd, um_tv, coef_range, pretrained_model,
-            retain_loader, forget_loader, threshold)
+        um_tv = merged_tvs["Uniform Merge"]
+        best_coef_um = get_best_coef("UniformMerge", um_tv)
         um_sd = apply_task_vector(pretrained_sd, um_tv, coef=-best_coef_um)
         um_m = load_model_with_sd(pretrained_model, um_sd)
         record("Uniform Merge", um_m)
-        checkpoint_mgr.save_best_coefs(trial_idx, "UniformMerge", {"coef": best_coef_um})
 
     # ── TIES-Merging ──────────────────────────────────────────────────────────
     if "TIES-Merging" in methods_to_run:
-        ties_tv = ties_merging(task_vectors)
-        best_coef_ties, _ = select_best_coef(
-            pretrained_sd, ties_tv, coef_range, pretrained_model,
-            retain_loader, forget_loader, threshold)
+        ties_tv = merged_tvs["TIES-Merging"]
+        best_coef_ties = get_best_coef("TIES", ties_tv)
         ties_sd = apply_task_vector(pretrained_sd, ties_tv, coef=-best_coef_ties)
         ties_m = load_model_with_sd(pretrained_model, ties_sd)
         record("TIES-Merging", ties_m)
-        checkpoint_mgr.save_best_coefs(trial_idx, "TIES", {"coef": best_coef_ties})
 
     # ── MagMax ────────────────────────────────────────────────────────────────
     if "MagMax" in methods_to_run:
-        mm_tv = magmax(task_vectors)
-        best_coef_mm, _ = select_best_coef(
-            pretrained_sd, mm_tv, coef_range, pretrained_model,
-            retain_loader, forget_loader, threshold)
+        mm_tv = merged_tvs["MagMax"]
+        best_coef_mm = get_best_coef("MagMax", mm_tv)
         mm_sd = apply_task_vector(pretrained_sd, mm_tv, coef=-best_coef_mm)
         mm_m = load_model_with_sd(pretrained_model, mm_sd)
         record("MagMax", mm_m)
-        checkpoint_mgr.save_best_coefs(trial_idx, "MagMax", {"coef": best_coef_mm})
 
     # ── 4. Package trial results ───────────────────────────────────────────────
     retrain_ref = dict(acc_dr=retrain_acc_dr, acc_df=retrain_acc_df,
@@ -264,6 +312,8 @@ def main():
                        help="Skip sparsity analysis")
     parser.add_argument("--focus-retrain", action="store_true",
                        help="Only evaluate retrain baseline (quick test)")
+    parser.add_argument("--recompute-coefs", action="store_true",
+                       help="Ignore cached best coefficients and recompute")
     args = parser.parse_args()
 
     # Reproducibility
@@ -297,6 +347,8 @@ def main():
         print("Focus mode: retrain baseline only")
     if args.cache_tvs:
         print("Task vector caching enabled")
+    if args.recompute_coefs:
+        print("Coefficient cache ignored; recomputing best coefficients")
 
     pool_size = len(list(product(EPOCHS_LIST, WD_LIST, LS_LIST)))
     print(f"Model pool size: {pool_size} models per trial\n")

@@ -86,10 +86,12 @@ def select_best_coef(pretrained_sd, tv, coef_range, base_model,
         threshold: Minimum retain accuracy threshold.
         
     Returns:
-        Tuple of (best_coef, best_forget_acc).
+        Tuple of (best_coef, lowest_forget_acc).
     """
-    best_coef = coef_range[0]
-    best_forget = float("inf")
+    best_coef = 0.0 if 0.0 in coef_range else coef_range[0]
+    # Objective: maximize forgetting => minimize forget-set accuracy.
+    lowest_forget_acc = float("inf")
+    found_feasible = False
     scratch = clone_model(base_model)
 
     for coef in coef_range:
@@ -98,12 +100,21 @@ def select_best_coef(pretrained_sd, tv, coef_range, base_model,
         r_acc = evaluate(scratch, retain_loader)
         if r_acc < threshold:
             continue
+        found_feasible = True
         f_acc = evaluate(scratch, forget_loader)
-        if f_acc < best_forget:
-            best_forget = f_acc
+        if f_acc < lowest_forget_acc:
+            lowest_forget_acc = f_acc
             best_coef = coef
-
-    return best_coef, best_forget
+    if not found_feasible:
+        # No coefficient passed retain threshold; use neutral/no-op coefficient.
+        scratch.load_state_dict(
+            build_state_dict_from_task_vector(pretrained_sd, tv, coef=0.0),
+            strict=True,
+        )
+        best_coef = 0.0
+        lowest_forget_acc = evaluate(scratch, forget_loader)
+        print("[WARN] No feasible coefficient met retain threshold; falling back to coef=0.0")
+    return best_coef, lowest_forget_acc
 
 
 def load_model_with_sd(base_model, state_dict):

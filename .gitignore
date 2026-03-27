@@ -64,4 +64,5 @@ runs/
 *.parquet
 datasets_local/
 data/
-
+*.pkl
+*.h5
