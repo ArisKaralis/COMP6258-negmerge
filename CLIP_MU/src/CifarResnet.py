@@ -53,7 +53,7 @@ warnings.filterwarnings(
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 SEED          = 42
-NUM_TRIALS    = 3          # Paper uses 3 independent trials
+NUM_TRIALS    = 1          # Paper uses 3 independent trials (set to 1 for testing)
 FORGET_RATIO  = 0.10       # 10% of training data is the forget set
 BATCH_SIZE    = int(os.getenv("BATCH_SIZE", "256"))
 CPU_COUNT     = os.cpu_count() or 4
@@ -487,8 +487,41 @@ def run_trial(trial_idx, pretrained_model):
         print(f"    {name:<30} Dr={acc_dr:.2f}  Df={acc_df:.2f}  "
               f"Dtest={acc_dtest:.2f}  MIA={mia:.2f}")
 
-    # ── NegMerge ──────────────────────────────────────────────────────────────
+    # Compute sparsity for all merged task vectors
+    print("\n  [Sparsity Analysis]")
+    sparsity_results = {}
+    
     nm_tv   = negmerge(pretrained_sd, task_vectors)
+    sp = compute_sparsity(nm_tv)
+    sparsity_results['NegMerge'] = sp
+    print(f"    NegMerge:      {sp['sparsity_pct']:.2f}% sparse "
+          f"({sp['nonzero_params']:,}/{sp['total_params']:,} params active) "
+          f"avg_mag={sp['avg_magnitude']:.6f}")
+    
+    um_tv = uniform_merge(task_vectors)
+    sp = compute_sparsity(um_tv)
+    sparsity_results['Uniform Merge'] = sp
+    print(f"    Uniform Merge: {sp['sparsity_pct']:.2f}% sparse "
+          f"({sp['nonzero_params']:,}/{sp['total_params']:,} params active) "
+          f"avg_mag={sp['avg_magnitude']:.6f}")
+    
+    ties_tv = ties_merging(task_vectors)
+    sp = compute_sparsity(ties_tv)
+    sparsity_results['TIES-Merging'] = sp
+    print(f"    TIES-Merging:  {sp['sparsity_pct']:.2f}% sparse "
+          f"({sp['nonzero_params']:,}/{sp['total_params']:,} params active) "
+          f"avg_mag={sp['avg_magnitude']:.6f}")
+    
+    mm_tv = magmax(task_vectors)
+    sp = compute_sparsity(mm_tv)
+    sparsity_results['MagMax'] = sp
+    print(f"    MagMax:        {sp['sparsity_pct']:.2f}% sparse "
+          f"({sp['nonzero_params']:,}/{sp['total_params']:,} params active) "
+          f"avg_mag={sp['avg_magnitude']:.6f}")
+    
+    print()
+
+    # ── NegMerge ──────────────────────────────────────────────────────────────
     # Find optimal coefficient (same 95%-retain-threshold logic)
     pretrained_eval_m = load_model_with_sd(pretrained_model, pretrained_sd)
     retain_pretrained = evaluate(pretrained_eval_m, retain_loader)
@@ -511,7 +544,6 @@ def run_trial(trial_idx, pretrained_model):
     record("Task Arithmetic†", ta_m)
 
     # ── Uniform Merge ─────────────────────────────────────────────────────────
-    um_tv = uniform_merge(task_vectors)
     best_coef_um, _ = select_best_coef(
         pretrained_sd, um_tv, coef_range, pretrained_model,
         retain_loader, forget_loader, threshold)
@@ -520,7 +552,6 @@ def run_trial(trial_idx, pretrained_model):
     record("Uniform Merge", um_m)
 
     # ── TIES-Merging ──────────────────────────────────────────────────────────
-    ties_tv = ties_merging(task_vectors)
     best_coef_ties, _ = select_best_coef(
         pretrained_sd, ties_tv, coef_range, pretrained_model,
         retain_loader, forget_loader, threshold)
@@ -529,7 +560,6 @@ def run_trial(trial_idx, pretrained_model):
     record("TIES-Merging", ties_m)
 
     # ── MagMax ────────────────────────────────────────────────────────────────
-    mm_tv = magmax(task_vectors)
     best_coef_mm, _ = select_best_coef(
         pretrained_sd, mm_tv, coef_range, pretrained_model,
         retain_loader, forget_loader, threshold)
@@ -543,6 +573,38 @@ def run_trial(trial_idx, pretrained_model):
     return results, retrain_ref
 
 # ── Avg. Gap computation ───────────────────────────────────────────────────────
+
+def compute_sparsity(task_vector):
+    """
+    Compute sparsity metrics for a task vector (dict of tensors).
+    Returns: {
+        'total_params': total number of parameters,
+        'nonzero_params': number of non-zero parameters,
+        'sparsity_pct': percentage of parameters that are exactly zero,
+        'avg_magnitude': average absolute value of non-zero params
+    }
+    """
+    total = 0
+    nonzero = 0
+    sum_mag = 0.0
+    
+    for key, tensor in task_vector.items():
+        flat = tensor.flatten()
+        total += flat.numel()
+        nz = (flat.abs() > 1e-10).sum().item()
+        nonzero += nz
+        sum_mag += flat.abs().sum().item()
+    
+    sparsity_pct = 100.0 * (total - nonzero) / total if total > 0 else 0
+    avg_magnitude = (sum_mag / nonzero) if nonzero > 0 else 0
+    
+    return {
+        'total_params': total,
+        'nonzero_params': nonzero,
+        'sparsity_pct': sparsity_pct,
+        'avg_magnitude': avg_magnitude,
+    }
+
 
 def avg_gap(method_metrics, retrain_metrics):
     keys = ["acc_dr", "acc_df", "acc_dtest", "mia"]
