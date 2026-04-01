@@ -230,6 +230,21 @@ class ImageNet:
     def name(self):
         return 'imagenet'
 
+class ImageNetValSubset(ImageNet):
+    """
+    Uses only the val folder — no training split required.
+    Suitable when only <data_location>/imagenet/val/ is present locally
+    (e.g. CLIP_MU/src/datasets_local/imagenet/val/).
+
+    The pretrained control threshold must be computed at runtime rather than
+    read from zeroshot_accuracies.json, since this is a different (smaller)
+    evaluation split.
+    """
+    def populate_train(self):
+        self.train_dataset = None
+        self.train_loader = None
+
+
 class ImageNetTrain(ImageNet):
 
     def get_test_dataset(self):
