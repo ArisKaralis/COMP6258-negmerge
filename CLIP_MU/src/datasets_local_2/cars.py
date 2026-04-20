@@ -16,12 +16,16 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import pyarrow.parquet as pq
+import pyarrow as pa
+from datasets import load_dataset
+
 
 _DEFAULT_HF_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(__file__),
     "../../../../datasets/stanford_cars_hf"
 ))
 HF_CARS_ROOT = os.environ.get("HF_CARS_ROOT", _DEFAULT_HF_ROOT)
+HF_CARS_PATH = r"C:\Users\xl14n23\PycharmProjects\COMP6258-negmerge\datasets_local\stanford_cars_hf"
 
 
 class _ParquetCarsDataset(Dataset):
@@ -35,7 +39,6 @@ class _ParquetCarsDataset(Dataset):
             )
         # Load all shards and concatenate
         tables = [pq.read_table(f) for f in files]
-        import pyarrow as pa
         table = pa.concat_tables(tables)
 
         # Extract columns as Python lists for fast __getitem__
@@ -61,7 +64,7 @@ class Cars:
         preprocess,
         location=os.path.expanduser("~/data"),  # unused, kept for API compatibility
         batch_size=32,
-        num_workers=4,
+        num_workers=16,
     ):
         root = HF_CARS_ROOT
 
@@ -81,4 +84,6 @@ class Cars:
             num_workers=num_workers,
         )
 
-        self.classnames = [str(i) for i in range(196)]
+        # self.classnames = [str(i) for i in range(196)]
+        ds = load_dataset("tanganke/stanford_cars")
+        self.classnames = ds["train"].features["label"].names
